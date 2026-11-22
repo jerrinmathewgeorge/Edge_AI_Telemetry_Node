@@ -1,0 +1,33 @@
+menu "Edge AI Gateway Configuration"
+
+    config EDGE_AI_MQTT_BROKER_URI
+        string "MQTT Broker URI"
+        default "mqtt://broker.local:1883"
+        help
+            URI of the Mosquitto / MQTT broker receiving abstracted telemetry flags.
+
+    config EDGE_AI_MQTT_TOPIC
+        string "MQTT Telemetry Topic"
+        default "edge_ai/telemetry"
+        help
+            MQTT topic matching telemetry_backend/mqtt_to_timescaledb.py.
+
+    config EDGE_AI_UART_BAUD_RATE
+        int "STM32 UART Baud Rate"
+        default 115200
+        help
+            Baud rate for the air-gapped STM32-to-ESP32 UART link.
+
+    config EDGE_AI_UART_TX_GPIO
+        int "UART TX GPIO"
+        default 17
+        help
+            ESP32 GPIO connected to STM32 UART RX.
+
+    config EDGE_AI_UART_RX_GPIO
+        int "UART RX GPIO"
+        default 16
+        help
+            ESP32 GPIO connected to STM32 UART TX.
+
+endmenu
