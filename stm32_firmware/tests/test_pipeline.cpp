@@ -1,8 +1,11 @@
+#include <algorithm>
+#include <array>
 #include <cassert>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <iostream>
+#include <iterator>
 
 #include "ewma_filter.h"
 #include "ring_buffer.h"
@@ -67,6 +70,34 @@ void test_sensirion_codec() {
     assert(!s::decode_sgp41_frame(sgp_rx, voc, nox));
 }
 
+void test_uart_framing() {
+    std::uint8_t frame[TELEMETRY_FRAME_SIZE_BYTES]{};
+    telemetry_pack_frame(42U, TELEMETRY_STATE_ANOMALY, frame);
+    assert(frame[0] == TELEMETRY_FRAME_SYNC_BYTE);
+
+    std::uint8_t seq = 0U;
+    telemetry_state_t state = TELEMETRY_STATE_NORMAL;
+    assert(telemetry_unpack_frame(frame, &seq, &state) == 1);
+    assert(seq == 42U && state == TELEMETRY_STATE_ANOMALY);
+
+    // Corrupted CRC must be rejected
+    std::uint8_t bad_crc[TELEMETRY_FRAME_SIZE_BYTES]{};
+    std::copy(std::begin(frame), std::end(frame), std::begin(bad_crc));
+    bad_crc[3] ^= 0x01U;
+    assert(telemetry_unpack_frame(bad_crc, &seq, &state) == 0);
+
+    // Bad sync byte must be rejected
+    std::uint8_t bad_sync[TELEMETRY_FRAME_SIZE_BYTES]{};
+    std::copy(std::begin(frame), std::end(frame), std::begin(bad_sync));
+    bad_sync[0] = 0x55U;
+    assert(telemetry_unpack_frame(bad_sync, &seq, &state) == 0);
+
+    // Unknown state code even with valid CRC must be rejected
+    std::uint8_t bad_state[TELEMETRY_FRAME_SIZE_BYTES] = {0xAAU, 0xFFU, 0x55U, 0x00U};
+    bad_state[3] = telemetry_crc8(bad_state, 3U);
+    assert(telemetry_unpack_frame(bad_state, &seq, &state) == 0);
+}
+
 void test_static_ring_buffer() {
     edge_ai::StaticRingBuffer<env_sample_t, 4> rb;
     assert(rb.empty());
@@ -121,6 +152,7 @@ void test_diurnal_drift_and_voc_spike() {
 
 int main() {
     test_sensirion_codec();
+    test_uart_framing();
     test_static_ring_buffer();
     test_diurnal_drift_and_voc_spike();
     std::cout << "ALL_PIPELINE_TESTS_PASSED\n";

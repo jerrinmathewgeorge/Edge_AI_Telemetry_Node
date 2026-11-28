@@ -5,6 +5,7 @@ CREATE EXTENSION IF NOT EXISTS timescaledb;
 
 CREATE TABLE IF NOT EXISTS telemetry_events (
     time        TIMESTAMPTZ NOT NULL,
+    seq_id      SMALLINT,
     state_code  SMALLINT    NOT NULL,
     state_label VARCHAR(32) NOT NULL
 );
@@ -15,7 +16,7 @@ CREATE INDEX IF NOT EXISTS idx_telemetry_events_state_time
     ON telemetry_events (state_code, time DESC);
 
 -- Example Grafana time-series query:
--- SELECT time AS "time", state_code, state_label
+-- SELECT time AS "time", seq_id, state_code, state_label
 -- FROM telemetry_events
 -- WHERE $__timeFilter(time)
 -- ORDER BY time ASC;

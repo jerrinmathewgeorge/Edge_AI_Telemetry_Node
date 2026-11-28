@@ -1,27 +1,27 @@
 # Telemetry Backend (MQTT → TimescaleDB → Grafana)
 
-Host-side ingestion pipeline for the **Edge AI Telemetry Node**. It subscribes to abstracted anomaly state flags published by the ESP32 gateway over Mosquitto MQTT and stores time-series events in PostgreSQL / TimescaleDB for Grafana visualization.
+Host-side ingestion pipeline for the **Edge AI Telemetry Node**. It subscribes to deterministic 4-byte CRC-8 telemetry frames published by the ESP32 gateway over Mosquitto MQTT, verifies packet integrity and sequence continuity, and stores time-series events in PostgreSQL / TimescaleDB for Grafana visualization.
 
 ## Components
 
-* `mqtt_receiver.py` — Lightweight console monitor subscribing to `MQTT_TOPIC` (supports both raw 1-byte hex flags and UTF-8 test strings).
-* `mqtt_to_timescaledb.py` — Parameterized SQL ingestion bridge writing parsed events into `telemetry_events`.
-* `schema.sql` — TimescaleDB extension, `telemetry_events` table, hypertable conversion, and query index.
+* `mqtt_receiver.py` — Lightweight console monitor subscribing to `MQTT_TOPIC` (decodes 4-byte CRC-8 frames as well as UTF-8/raw test inputs).
+* `mqtt_to_timescaledb.py` — CRC-8 verifying, sequence-tracking SQL ingestion bridge writing parsed events into `telemetry_events`.
+* `schema.sql` — TimescaleDB extension, `telemetry_events` table (`time`, `seq_id`, `state_code`, `state_label`), hypertable conversion, and query index.
 * `.env.example` — Template for MQTT broker and database environment variables.
 * `requirements.txt` — Python dependencies (`paho-mqtt`, `psycopg2-binary`).
 
-## 1-Byte State Flag Contract
+## Deterministic 4-Byte Frame Contract
 
-In line with the STM32-to-ESP32 air-gap boundary, raw environmental samples stay in STM32 SRAM and only abstracted state codes are published to `edge_ai/telemetry`:
+In line with the STM32-to-ESP32 air-gap boundary, raw environmental samples stay in STM32 SRAM and only fixed 4-byte frames (`[SYNC 0xAA][SEQ_ID][STATE_FLAG][CRC8]`) cross UART4 and MQTT (`edge_ai/telemetry`):
 
-| Byte Code | Label | Meaning |
+| Byte(s) | Field | Details |
 | :--- | :--- | :--- |
-| `0x00` | `NORMAL` | Baseline air quality within EWMA + TinyML bounds |
-| `0x01` | `ANOMALY` | Residual spike flagged by TinyML inference |
-| `0x02` | `CALIBRATING` | Initial EWMA / MOX baseline warm-up window |
-| `0xFF` | `SENSOR_FAULT` | Physical I2C read/CRC fault reported by edge node |
+| `0` | `SYNC` | Fixed `0xAA` framing header |
+| `1` | `SEQ_ID` | Rolling `uint8_t` (`0..255`) for dropped-frame detection |
+| `2` | `STATE_FLAG` | `0x00` `NORMAL`, `0x01` `ANOMALY`, `0x02` `CALIBRATING`, `0xFF` `SENSOR_FAULT` |
+| `3` | `CRC8` | CRC-8 (`poly 0x31`, `init 0xFF`) over bytes `0..2` |
 
-For bench testing without binary framing, `mqtt_to_timescaledb.py` also accepts ASCII integers (e.g., `1`) or `LABEL:CODE` strings (e.g., `ANOMALY:1`).
+For bench testing without binary framing, `mqtt_to_timescaledb.py` also accepts ASCII integers (e.g., `1`) or `LABEL:CODE` strings (e.g., `ANOMALY:1`) with `seq_id = NULL`.
 
 ## Quick Start
 

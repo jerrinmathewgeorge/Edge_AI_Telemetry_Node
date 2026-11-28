@@ -1,4 +1,4 @@
-"""Lightweight MQTT subscriber for monitoring Edge AI telemetry payloads."""
+"""Lightweight MQTT subscriber for monitoring Edge AI telemetry frames."""
 
 import os
 import sys
@@ -7,6 +7,24 @@ import paho.mqtt.client as mqtt
 BROKER_HOST = os.getenv("MQTT_BROKER", "localhost")
 BROKER_PORT = int(os.getenv("MQTT_PORT", "1883"))
 TOPIC = os.getenv("MQTT_TOPIC", "edge_ai/telemetry")
+FRAME_SYNC_BYTE = 0xAA
+
+STATE_LABELS = {
+    0x00: "NORMAL",
+    0x01: "ANOMALY",
+    0x02: "CALIBRATING",
+    0xFF: "SENSOR_FAULT",
+}
+
+
+def compute_crc8(data: bytes) -> int:
+    """Compute Sensirion-compatible CRC-8 (poly 0x31, init 0xFF)."""
+    crc = 0xFF
+    for byte in data:
+        crc ^= byte
+        for _ in range(8):
+            crc = ((crc << 1) ^ 0x31) & 0xFF if (crc & 0x80) else (crc << 1) & 0xFF
+    return crc
 
 
 def on_connect(client, userdata, flags, reason_code, properties=None):
@@ -17,8 +35,16 @@ def on_connect(client, userdata, flags, reason_code, properties=None):
 
 
 def on_message(client, userdata, msg):
-    """Print incoming UTF-8 or raw 1-byte state flag payloads."""
+    """Decode 4-byte CRC-8 frames or print UTF-8/raw test payloads."""
     raw = msg.payload
+    if len(raw) == 4 and raw[0] == FRAME_SYNC_BYTE:
+        crc_ok = compute_crc8(raw[:3]) == raw[3]
+        seq_id, code = raw[1], raw[2]
+        label = STATE_LABELS.get(code, f"UNKNOWN_0x{code:02X}")
+        status = "CRC_OK" if crc_ok else "CRC_ERR"
+        print(f"MQTT [{msg.topic}]: seq={seq_id} state={label} (0x{code:02X}) [{status}]")
+        return
+
     try:
         decoded = raw.decode("utf-8").strip()
         print(f"MQTT [{msg.topic}]: {decoded}")

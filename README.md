@@ -1,13 +1,14 @@
 # Edge AI Telemetry Node
 
-**Project Status:** 
-- **Phase 1 (Complete):** Systems architecture, DSP logic pipeline, and TinyML footprint verified.
-- **Phase 2 (In Progress):** Consolidating bare-metal C++ DMA I2C sensor drivers for the Sensirion SGP41/SHT45 environmental payload.
+**Project Status:**
+- **Host-Verified Scaffolds & DSP Logic (Completed):** Dual-MCU architecture, Python MQTT/TimescaleDB ingestion pipeline (4-byte CRC-8 framed state parser), ESP-IDF UART-to-MQTT gateway scaffold, and zero-heap C++17 STM32 firmware modules (`StaticRingBuffer`, `EwmaBaselineFilter`, Sensirion SHT45/SGP41 CRC-8 codec, and host unit tests).
+- **Phase 2 — Target Silicon Integration (In Progress):** Non-blocking STM32 DMA I2C state machine (`sensor_pipeline.h`), STM32CubeIDE target build (`STM32F303ZETx`), Edge Impulse environmental model `.map` footprint verification, and live desk hardware benchmarks.
+- **Phase 3 — Future Roadmap:** STM32 GPIO wake-pin control for ESP32 deep-sleep power gating (`Wake-on-Anomaly`) once the always-on end-to-end pipeline is benchmarked.
 
 ## Overview
-This project is a heterogeneous, dual-MCU edge telemetry architecture designed for Cyber-Physical Systems (CPS) and Smart City infrastructure. It pairs an ARM Cortex-M4F (STM32) for deterministic, hard real-time signal processing with an ESP32 network coprocessor. 
+This project is a heterogeneous, dual-MCU edge telemetry architecture designed for Cyber-Physical Systems (CPS) and Smart City infrastructure. It pairs an ARM Cortex-M4F (STM32 Nucleo-F303ZE) for hard real-time signal processing with an ESP32 network coprocessor.
 
-The system is engineered to solve a critical issue in environmental Edge AI: **MOX sensor drift**. Rather than relying on static neural networks that hallucinate false anomalies during natural daily temperature/humidity shifts, this pipeline utilizes a hybrid C-code EWMA filter to mathematically absorb macro-drift, feeding only the clean residuals into a statically allocated TinyML inference engine.
+The system addresses a core challenge in environmental Edge AI: **MOX sensor drift**. Rather than relying on static neural networks that trigger false anomalies during natural diurnal temperature and humidity shifts, the pipeline uses a bare-metal C++ EWMA filter to absorb slow baseline drift and feeds only the clean residuals into a statically allocated TinyML inference engine.
 
 ## System Architecture
 
@@ -20,12 +21,12 @@ graph TD
 
     subgraph "Secure Edge Compute (STM32 Cortex-M4F)"
         DMA[Hardware Timer & DMA I2C<br>Zero CPU Polling]
-        EWMA[Bare-Metal C EWMA Filter<br>Macro-Drift Cancellation]
-        ML[Edge Impulse Float32<br>TinyML Inference]
+        EWMA[Bare-Metal C++ EWMA Filter<br>Macro-Drift Cancellation]
+        ML[Static TinyML Inference<br>Target: < 2 KB RAM / < 15 KB Flash]
     end
 
     subgraph "Air-Gapped Network Coprocessor (ESP32)"
-        UART[UART Bridge<br>115200 Baud]
+        UART[Deterministic UART Framing<br>115200 Baud, CRC-8]
         MQTT[MQTT Wi-Fi Client]
     end
 
@@ -34,29 +35,33 @@ graph TD
         Grafana[Grafana Dashboard]
     end
 
-    SHT45 -- "Humidity Data" --> SGP41
+    SHT45 -- "RH/T Compensation" --> SGP41
     SGP41 & SHT45 -- "Raw Data" --> DMA
     DMA -- "Static SRAM Ring Buffer" --> EWMA
     EWMA -- "Clean Residuals" --> ML
-    ML -- "1-Byte State Flag" --> UART
+    ML -- "4-Byte CRC-8 Frame" --> UART
     UART --> MQTT
-    MQTT -- "UDP / TCP" --> TSDB
+    MQTT -- "TCP / MQTT" --> TSDB
     TSDB --> Grafana
 ```
 
 ## Core Engineering Constraints
 
-This architecture enforces strict firmware and memory discipline to ensure bounded execution latency and eliminate network-induced thread jitter.
+1. **Zero Dynamic Allocation:** No `malloc`/`free` or heap-backed containers in the firmware pipeline. Ring buffers, codecs, and EWMA state are statically allocated at compile time.
+2. **Non-Blocking Acquisition Target:** Hardware-timer and DMA-driven I2C acquisition (avoiding `HAL_Delay` polling loops in the main loop).
+3. **Bounded Memory Footprint Target:** Static TinyML inference budget bounded to **< 2 KB RAM** and **< 15 KB Flash** (informed by an earlier 1.4 KB RAM / 12.1 KB Flash Float32 Edge Impulse prototype; environmental `.map` verification is part of Phase 2).
+4. **Physical-Layer Compensation:** SHT45 temperature and relative humidity are encoded per Sensirion Table 12 and cross-fed directly into SGP41 measurement commands (`0x26 0x19`) prior to EWMA filtering.
+5. **Air-Gapped Deterministic UART Framing:** The STM32 compute core remains physically isolated from Wi-Fi/TCP/IP. Raw sensor readings never leave STM32 SRAM; only a fixed **4-byte CRC-8 state frame** (`[0xAA][SEQ_ID][STATE_FLAG][CRC8]`) crosses `UART4` at `115200` baud for integrity validation and dropped-frame detection.
 
-1. **Zero Dynamic Allocation:** Absolute ban on `malloc`/`free`. All SRAM ring buffers and memory arenas are statically allocated at compile time to prevent memory fragmentation.
-2. **Deterministic Ingestion:** Zero blocking delay loops (`HAL_Delay`). Data ingestion is strictly driven via hardware timers and Direct Memory Access (DMA).
-3. **Hardware-Aware Neural Network:** The Edge Impulse Float32 C++ inference model operates under a highly restricted memory footprint, explicitly bounded to **< 2 KB RAM** and **< 15 KB Flash**.
-4. **Physical-Layer Compensation:** Before mathematical filtering occurs, relative humidity from the SHT45 is cross-fed directly into the SGP41 command registers to dynamically adjust the Sensirion ASIC’s resistance baselines at the silicon level.
-5. **Secure Network Isolation:** The STM32 compute core is physically air-gapped from the TCP/IP stack. Raw environmental data is processed and destroyed locally in STM32 SRAM. Only an abstracted, 1-byte anomaly classification state flag is transmitted across the UART boundary to the ESP32.
+## Repository Layout
+
+* `stm32_firmware/` — Zero-heap C++17 headers (`telemetry_protocol.h`, `ring_buffer.h`, `ewma_filter.h`, `sensirion_codec.h`) and host `g++` unit/drift tests (`tests/test_pipeline.cpp`).
+* `esp32_gateway/` — ESP-IDF UART-to-MQTT coprocessor firmware (`UART_NUM_2` stream framer → Mosquitto MQTT).
+* `telemetry_backend/` — Python `paho-mqtt` subscriber, TimescaleDB ingestion bridge, and SQL schema (`telemetry_events`).
 
 ## Technology Stack
 
 * **Hardware:** STM32 Nucleo-F303ZE, ESP32 DevKit V1, Sensirion SGP41, Sensirion SHT45.
-* **Firmware:** Bare-Metal C/C++, STM32 HAL/LL, ESP-IDF.
-* **AI & DSP:** Edge Impulse (TinyML), Exponentially Weighted Moving Average (EWMA) C-filters.
+* **Firmware:** Bare-Metal C/C++17, STM32 HAL/LL, ESP-IDF.
+* **AI & DSP:** Edge Impulse (TinyML), Exponentially Weighted Moving Average (EWMA) C++ filters, Sensirion CRC-8 (`0x31`).
 * **Telemetry Pipeline:** Python, Mosquitto (MQTT), TimescaleDB (PostgreSQL), Grafana.

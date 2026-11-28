@@ -1,12 +1,12 @@
 # ESP32 Gateway (Air-Gapped UART-to-MQTT Bridge)
 
-Network coprocessor firmware built with **ESP-IDF**. In keeping with the node's security and timing isolation boundary, the ESP32 has **no direct access to I2C sensors or raw STM32 SRAM** — it only forwards abstracted telemetry state bytes received over UART to the local Mosquitto MQTT broker.
+Network coprocessor firmware built with **ESP-IDF**. In keeping with the node's security and timing isolation boundary, the ESP32 has **no direct access to I2C sensors or raw STM32 SRAM** — it validates deterministic 4-byte state frames (`[0xAA][SEQ_ID][STATE_FLAG][CRC8]`) from STM32 `UART4` and forwards only valid frames to the local Mosquitto MQTT broker.
 
 ## Hardware Wiring (Default Kconfig Mapping)
 
 | ESP32 DevKit V1 | STM32 Nucleo-F303ZE | Notes |
 | :--- | :--- | :--- |
-| `GPIO 16` (`UART_NUM_2` RX) | `UART4_TX` | `115200` baud, 8N1 |
+| `GPIO 16` (`UART_NUM_2` RX) | `UART4_TX` | `115200` baud, 8N1 (`[0xAA][SEQ][STATE][CRC8]`) |
 | `GPIO 17` (`UART_NUM_2` TX) | `UART4_RX` | Optional return path |
 | `GND` | `GND` | Shared ground reference required |
 
