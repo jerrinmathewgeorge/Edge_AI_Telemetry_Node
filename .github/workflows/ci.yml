@@ -1,0 +1,46 @@
+name: Edge AI Telemetry Node CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  stm32_host_tests:
+    name: STM32 C++17 Host Tests (ASan + UBSan)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Compile and run pipeline and FSM unit tests
+        run: |
+          mkdir -p /tmp/edge_ai_ci
+          g++ -std=c++17 -Wall -Wextra -Werror -fsanitize=address,undefined -fno-omit-frame-pointer \
+            -I stm32_firmware/include stm32_firmware/tests/test_pipeline.cpp -o /tmp/edge_ai_ci/test_pipeline
+          /tmp/edge_ai_ci/test_pipeline
+          g++ -std=c++17 -Wall -Wextra -Werror -fsanitize=address,undefined -fno-omit-frame-pointer \
+            -I stm32_firmware/include stm32_firmware/tests/test_sensor_pipeline.cpp -o /tmp/edge_ai_ci/test_fsm
+          /tmp/edge_ai_ci/test_fsm
+
+  telemetry_backend_tests:
+    name: Telemetry Backend Python Checks
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: pip install -r telemetry_backend/requirements.txt
+
+      - name: Compile-check Python modules
+        run: python -m py_compile telemetry_backend/mqtt_receiver.py telemetry_backend/mqtt_to_timescaledb.py telemetry_backend/test_parser.py
+
+      - name: Run telemetry parser unit tests
+        run: python -m unittest discover -s telemetry_backend -p "test_*.py" -v
